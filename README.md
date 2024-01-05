@@ -10,5 +10,5 @@ the client depending on the outcome of their request.
 Usage
 
 1. Compile Server.cpp and Client.cpp found in the src/ directory
-2. Open one Server instance and one or more client instances in separate Linux terminals
+2. Open one Server instance and one or more client instances on separate Linux terminals
 3. Use the client terminals to send orders to the server using the following input format: {side (BUY/SELL)} {qty} {limit}
