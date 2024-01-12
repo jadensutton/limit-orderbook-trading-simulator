@@ -11,7 +11,7 @@ Design Decisions
 
 I chose to represent the orderbook as a sorted, doubly linked list. The linked list data structure allows for O(1) insertion/removal, which is critical when considering
 that an orderbook requires storing massive amounts of data. Additionally, the fact that the linked list is sorted allows for quick and efficient matching of incoming orders.
-I also use a hash table to store a pointer for each order indexed by its order ID. This allows for O(1) lookup during order cancellation.
+I also use a hash table to store a pointer to every active order object, using the corresponding order ID as the key. This allows for O(1) lookup during order cancellation.
 
 For IPC, I decided on a message queue. While I acknowledge that shared memory would have been much faster, this project was mainly done as a learning exercise in
 Linux IPC and client/server architecture. I may update the project in the future to use shared memory.
