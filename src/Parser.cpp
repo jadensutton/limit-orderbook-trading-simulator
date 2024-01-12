@@ -1,15 +1,11 @@
+#include <unordered_map>
 #include <string.h>
 #include <stdlib.h>
 
 #include "Parser.h"
 #include "Order.h"
 
-#define NULL nullptr
 #define EXPECTED_TOKENS 4
-
-Parser::Parser() {
-	id = 0;
-}
 
 /*
 Parse a request string and return an Order object
@@ -18,8 +14,7 @@ ParseResult Parser::parseOrder(char request[MAX_TEXT]) {
 	struct ParseResult result;
 	result.clientId = 0;
 		
-	int clientId;
-	OrderType type;
+	OrderType orderType;
 	int qty;
 	int limit;
 			
@@ -27,26 +22,33 @@ ParseResult Parser::parseOrder(char request[MAX_TEXT]) {
 	bool validTokens = true;
 	bool receivedClientId = false;
 	char *token = strtok(request, " ");
-	while (token != NULL) {
+	while (token != nullptr) {
 		switch (i) {
 			case 0:
 				// Client
-				clientId = atoi(token);
-				result.clientId = clientId;
+				result.clientId = atoi(token);
 				break;
 			case 1:
-				// Order type
+				// Request type
 				if (strlen(token) == 3 && strncmp(token, "BUY", 3) == 0) {
-					type = OrderType::LIMIT_BUY;
+					result.requestType = NEW_ORDER;
+					orderType = LIMIT_BUY;
 				} else if (strlen(token) == 4 && strncmp(token, "SELL", 4) == 0) {
-					type = OrderType::LIMIT_SELL;
+					result.requestType = NEW_ORDER;
+					orderType = LIMIT_SELL;
+				} else if (strlen(token) == 6 && strncmp(token, "CANCEL", 6) == 0) {
+					result.requestType = CANCEL_ORDER;
 				} else {
 					validTokens = false;
 				}
 				break;
 			case 2:
-				// Qty
-				qty = atoi(token);
+				// Qty or Order ID
+				if (result.requestType == NEW_ORDER) {
+					qty = atoi(token);
+				} else if (result.requestType == CANCEL_ORDER) {
+					result.orderId = atoi(token);
+				}
 				break;
 			case 3:
 				// Limit
@@ -56,19 +58,21 @@ ParseResult Parser::parseOrder(char request[MAX_TEXT]) {
 		}
 		
 		i += 1;
-		token = strtok(NULL, " ");
+		token = strtok(nullptr, " ");
 	}
 	
 	// If request is invalid
-	if (i > EXPECTED_TOKENS) {
-		result.error = 1;
-	} else if (i < EXPECTED_TOKENS) {
-		result.error = 2;
-	} else if (!validTokens) {
+	if (!validTokens) {
 		result.error = 3;
+	} else if (i > expectedTokens[result.requestType]) {
+		result.error = 1;
+	} else if (i < expectedTokens[result.requestType]) {
+		result.error = 2;
 	} else {
-		result.error = 0;
-		result.order = new Order(id, type, limit, qty, clientId);	// Create a new order object with provided information;
+		if (result.requestType == NEW_ORDER) {
+			result.error = 0;
+			result.order = new Order(orderType, limit, qty, result.clientId);	// Create a new order object with provided information;
+		}
 	}
 	
 	return result;	

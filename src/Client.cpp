@@ -6,6 +6,13 @@
 
 #include "Server.h"
 
+/*
+Read from the client's FIFO and outputs notifications from the matching engine
+*/
+void notifications() {
+	// Not yet implemented
+}
+
 int main() {
 	int id = getpid();	// Use PID to represent the client ID
 	int serverMsgId;

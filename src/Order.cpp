@@ -2,7 +2,7 @@
 
 
 Order::Order(OrderType type, int limit, int qty, int clientId) {
-	this->id = ++idCounter;
+	this->id = idCounter++;
 	this->type = type;
 	this->limit = limit;
 	this->qty = qty;

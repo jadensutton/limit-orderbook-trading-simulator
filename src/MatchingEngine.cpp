@@ -1,11 +1,17 @@
 #include <iostream>
 #include <queue>
 #include <string>
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #include "MatchingEngine.h"
 #include "Order.h"
+
+MatchingEngine::MatchingEngine() {
+	bids = new OrderNode;
+	asks = new OrderNode;
+}
 
 /*
 Continuously poll the bid queue and service orders in FIFO fashion
@@ -46,12 +52,13 @@ Place a new order
 @param order - Order object
 */
 void MatchingEngine::placeOrder(Order* order) {
-	std::cout << "[MATCHING ENGINE] " << order->getType() << " order received (ID=" << order->getId() << ")" << std::endl;
 	if (order->getType() == LIMIT_BUY) {
+		printf("[MATCHING ENGINE] Buy order received (ID=%d, Limit=%d, Qty=%d)\n", order->getId(), order->getLimit(), order->getQty());
 		bidQueueLock.lock();
 		bidQueue.push(order);
 		bidQueueLock.unlock();
 	} else if (order->getType() == LIMIT_SELL) {
+		printf("[MATCHING ENGINE] Sell order received (ID=%d, Limit=%d, Qty=%d)\n", order->getId(), order->getLimit(), order->getQty());
 		askQueueLock.lock();
 		askQueue.push(order);
 		askQueueLock.unlock();
@@ -60,16 +67,36 @@ void MatchingEngine::placeOrder(Order* order) {
 
 /*
 Cancel an active order
+@param clientId - ID of client requesting to cancel order
 @param orderId - ID of order
+@return result of cancellation request
 */
-void MatchingEngine::cancelOrder(int orderId) {
-	// Not yet implemented
+CancelOrderResponse MatchingEngine::cancelOrder(int clientId, int orderId) {
+	auto it = orderNodeTable.find(orderId);
+	if (it == orderNodeTable.end()) {
+		// Order node not present in hash table
+		return ORDER_NOT_FOUND;
+	}
+	
+	OrderNode* orderNode = it->second;
+	
+	if (orderNode->payload->getClientId() != clientId) {
+		// Client is attempting to cancel an order they did not create
+		return CLIENT_NOT_AUTHORIZED;
+	}
+	
+	std::mutex& lock = orderNode->payload->getType() == LIMIT_BUY ? bidsLock : asksLock;
+	lock.lock();
+	free(orderNode->payload);
+	freeOrderNode(orderNode);
+	lock.unlock();
+	return ORDER_CANCELLED;
 }
 		
 /*
 Attempt to match a new bid order to a pre-existing ask in the orderbook
 @param order - Pointer to Order object to attempt to match
-@return true if order successfully matched, false otherwise
+@return status of order match
 */
 MatchStatus MatchingEngine::matchBid(Order* order) {
 	asksLock.lock();
@@ -78,26 +105,15 @@ MatchStatus MatchingEngine::matchBid(Order* order) {
 		return NO_FILL;
 	}
 
-	struct OrderNode* currNode = asks;
-	while (currNode->next && order->getLimit() >= currNode->next->payload->getLimit()) {
-		if (order->getQty() < currNode->next->payload->getQty()) {
-			handlePartialFill(currNode->next->payload, order->getQty());
-			handleFill(order);
+	struct OrderNode* currNode = asks->next;
+	struct OrderNode* nextNode;
+	while (currNode && order->getLimit() >= currNode->payload->getLimit()) {
+		nextNode = currNode->next;
+		if (fillOrder(order, currNode) == FULL_FILL) {
 			asksLock.unlock();
 			return FULL_FILL;
-		} else if (order->getQty() > currNode->next->payload->getQty()) {
-			handlePartialFill(order, currNode->next->payload->getQty());
-			handleFill(currNode->next->payload);
-			freeOrderNode(currNode->next);
-		} else {
-			handleFill(order);
-			handleFill(currNode->next->payload);
-			freeOrderNode(currNode->next);
-			asksLock.unlock();
-			return FULL_FILL;
-		}
-		
-		currNode = currNode->next;
+		}	
+		currNode = nextNode;
 	}
 	
 	asksLock.unlock();
@@ -114,20 +130,17 @@ void MatchingEngine::addBid(Order* order) {
 	while (currNode->next && currNode->next->payload->getLimit() >= order->getLimit()) {
 		currNode = currNode->next;
 	}
-	
-	struct OrderNode* orderNode = (struct OrderNode*) malloc(sizeof(struct OrderNode));
-	
-	orderNode->payload = order;
-	orderNode->next = currNode->next;
-	currNode->next = orderNode;
+
+	addOrderNode(currNode, order);
 	bidsLock.unlock();
 	
-	std::cout << "[MATCHING ENGINE] Order added to bid book (ID=" << order->getId() << ")" << std::endl;
+	printf("[MATCHING ENGINE] Order added to bid book (ID=%d)\n", order->getId());
 }
 
 /*
-Add ask order to the orderbook
-@param order - Pointer to Order object to add to book
+Attempt to match a new ask order to a pre-existing bid in the orderbook
+@param order - Pointer to Order object to attempt to match
+@return status of order match
 */
 MatchStatus MatchingEngine::matchAsk(Order* order) {
 	bidsLock.lock();
@@ -136,26 +149,15 @@ MatchStatus MatchingEngine::matchAsk(Order* order) {
 		return NO_FILL;
 	}
 
-	struct OrderNode* currNode = bids;
-	while (currNode->next && order->getLimit() <= currNode->next->payload->getLimit()) {
-		if (order->getQty() < currNode->next->payload->getQty()) {
-			handlePartialFill(currNode->next->payload, order->getQty());
-			handleFill(order);
+	struct OrderNode* currNode = bids->next;
+	struct OrderNode* nextNode;
+	while (currNode && order->getLimit() <= currNode->payload->getLimit()) {
+		nextNode = currNode->next;
+		if (fillOrder(order, currNode) == FULL_FILL) {
 			bidsLock.unlock();
 			return FULL_FILL;
-		} else if (order->getQty() > currNode->next->payload->getQty()) {
-			handlePartialFill(order, currNode->next->payload->getQty());
-			handleFill(currNode->next->payload);
-			currNode->next = currNode->next->next;
-		} else {
-			handleFill(order);
-			handleFill(currNode->next->payload);
-			currNode->next = currNode->next->next;
-			bidsLock.unlock();
-			return FULL_FILL;
-		}
-		
-		currNode = currNode->next;
+		}	
+		currNode = nextNode;
 	}
 	
 	bidsLock.unlock();
@@ -173,31 +175,64 @@ void MatchingEngine::addAsk(Order* order) {
 		currNode = currNode->next;
 	}
 	
-	struct OrderNode* orderNode = (struct OrderNode*) malloc(sizeof(struct OrderNode));
-	
-	orderNode->payload = order;
-	orderNode->next = currNode->next;
-	currNode->next = orderNode;
+	addOrderNode(currNode, order);
 	asksLock.unlock();
 	
-	std::cout << "[MATCHING ENGINE] Order added to ask book (ID=" << order->getId() << ")" << std::endl;
+	printf("[MATCHING ENGINE] Order added to ask book (ID=%d)\n", order->getId());
+}
+
+MatchStatus MatchingEngine::fillOrder(Order* incomingOrder, OrderNode* existingOrderNode) {
+	if (incomingOrder->getQty() < existingOrderNode->payload->getQty()) {
+		handlePartialFill(existingOrderNode->payload, incomingOrder->getQty());
+		handleFill(incomingOrder);
+		return FULL_FILL;
+	} else if (incomingOrder->getQty() > existingOrderNode->payload->getQty()) {
+		handlePartialFill(incomingOrder, existingOrderNode->payload->getQty());
+		handleFill(existingOrderNode->payload);
+		freeOrderNode(existingOrderNode);
+		return PARTIAL_FILL;
+	}
+	
+	handleFill(incomingOrder);
+	handleFill(existingOrderNode->payload);
+	freeOrderNode(existingOrderNode);
+	return FULL_FILL;
 }
 
 void MatchingEngine::handleFill(Order* order) {
 	notifyClient(order->getClientId(), "FILL");
+	printf("[MATCHING ENGINE] Order filled (ID=%d)\n", order->getId());
 	free(order);
 }
 
 void MatchingEngine::handlePartialFill(Order* order, int qty) {
+	int oldQty = order->getQty();
 	order->setStatus(PARTIAL_FILL);
 	notifyClient(order->getClientId(), "PARTIAL FILL");
 	order->setQty(order->getQty() - qty);
+	printf("[MATCHING ENGINE] Order partially filled (ID=%d, Old Qty=%d, New Qty=%d)\n", order->getId(), oldQty, order->getQty());
+}
+
+void MatchingEngine::addOrderNode(OrderNode* currNode, Order* order) {
+	struct OrderNode* orderNode = (struct OrderNode*) malloc(sizeof(struct OrderNode));	// Dynamically allocate memory for new node
+	
+	orderNode->payload = order;
+	orderNode->next = currNode->next;
+	if (currNode->next) {
+		currNode->next->prev = orderNode;
+	}
+	currNode->next = orderNode;
+	orderNode->prev = currNode;
+	
+	orderNodeTable[order->getId()] = orderNode;	// Add order node to hash table for O(1) lookup
 }
 
 void MatchingEngine::freeOrderNode(OrderNode* node) {
-	struct OrderNode* freeNode = node->next;
-	node->next = freeNode->next;
-	free(freeNode);
+	node->prev->next = node->next;
+	if (node->next) {
+		node->next->prev = node->prev;
+	}
+	free(node);
 }
 
 /*
@@ -207,5 +242,4 @@ Send a notification message to a client
 */
 void MatchingEngine::notifyClient(int clientId, std::string msg) {
 	// Not yet implemented
-	//int fd = open("./tmp/fifo%s", O_WRONLY);
 }
