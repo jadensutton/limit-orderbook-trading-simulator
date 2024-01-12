@@ -2,21 +2,30 @@
 #include <queue>
 #include <string>
 #include <stdio.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #include "MatchingEngine.h"
 #include "Order.h"
 
+#define POLL_BID_QUEUE_CPU 0
+#define POLL_ASK_QUEUE_CPU 1
+
 MatchingEngine::MatchingEngine() {
 	bids = new OrderNode;
 	asks = new OrderNode;
 }
 
+static void setThreadAffinity(int cpuNum);
+static void notifyClient(int clientId, std::string msg);
+
 /*
 Continuously poll the bid queue and service orders in FIFO fashion
 */
 void MatchingEngine::pollBidQueue() {
+	setThreadAffinity(POLL_BID_QUEUE_CPU);
+	
 	Order* nextOrder;	// Pointer for the next order in queue
 	while (1) {
 		if (!bidQueue.empty()) {
@@ -34,6 +43,8 @@ void MatchingEngine::pollBidQueue() {
 Continuously poll the ask queue and service orders in FIFO fashion
 */
 void MatchingEngine::pollAskQueue() {
+	setThreadAffinity(POLL_ASK_QUEUE_CPU);
+	
 	Order* nextOrder;	// Pointer for the next order in queue
 	while (1) {
 		if (!askQueue.empty()) {
@@ -48,7 +59,7 @@ void MatchingEngine::pollAskQueue() {
 }
 
 /*
-Place a new order
+Adds an incoming order to the corresponding queue
 @param order - Order object
 */
 void MatchingEngine::placeOrder(Order* order) {
@@ -181,6 +192,12 @@ void MatchingEngine::addAsk(Order* order) {
 	printf("[MATCHING ENGINE] Order added to ask book (ID=%d)\n", order->getId());
 }
 
+/*
+Execute an order fill between an incoming order and a pre-existing order in the orderbook
+@param incomingOrder - New incoming order
+@param existingOrderNode - Node object containing the existing order in the book that is being matched with
+@return status of match
+*/
 MatchStatus MatchingEngine::fillOrder(Order* incomingOrder, OrderNode* existingOrderNode) {
 	if (incomingOrder->getQty() < existingOrderNode->payload->getQty()) {
 		handlePartialFill(existingOrderNode->payload, incomingOrder->getQty());
@@ -199,12 +216,21 @@ MatchStatus MatchingEngine::fillOrder(Order* incomingOrder, OrderNode* existingO
 	return FULL_FILL;
 }
 
+/*
+Handle a complete fill of an order object
+@param order - Order being filled
+*/
 void MatchingEngine::handleFill(Order* order) {
 	notifyClient(order->getClientId(), "FILL");
 	printf("[MATCHING ENGINE] Order filled (ID=%d)\n", order->getId());
 	free(order);
 }
 
+/*
+Handle a partial fill of an order object
+@param order - Order being filled
+@param qty - Quantity of order fill
+*/
 void MatchingEngine::handlePartialFill(Order* order, int qty) {
 	int oldQty = order->getQty();
 	order->setStatus(PARTIAL_FILL);
@@ -213,6 +239,11 @@ void MatchingEngine::handlePartialFill(Order* order, int qty) {
 	printf("[MATCHING ENGINE] Order partially filled (ID=%d, Old Qty=%d, New Qty=%d)\n", order->getId(), oldQty, order->getQty());
 }
 
+/*
+Create a new order node and insert it into the orderbook
+@param currNode - The node that the new order should be placed directly after
+@param order - The new order
+*/
 void MatchingEngine::addOrderNode(OrderNode* currNode, Order* order) {
 	struct OrderNode* orderNode = (struct OrderNode*) malloc(sizeof(struct OrderNode));	// Dynamically allocate memory for new node
 	
@@ -227,6 +258,10 @@ void MatchingEngine::addOrderNode(OrderNode* currNode, Order* order) {
 	orderNodeTable[order->getId()] = orderNode;	// Add order node to hash table for O(1) lookup
 }
 
+/*
+Remove an order node from the book and free the memory associated with the node
+@param node - The order node to remove
+*/
 void MatchingEngine::freeOrderNode(OrderNode* node) {
 	node->prev->next = node->next;
 	if (node->next) {
@@ -236,10 +271,21 @@ void MatchingEngine::freeOrderNode(OrderNode* node) {
 }
 
 /*
+Set the thread affinity for the current thread
+@param cpuNum - The CPU to pin the current thread to
+*/
+static void setThreadAffinity(int cpuNum) {
+	cpu_set_t cpuset;
+	CPU_ZERO(&cpuset);
+	CPU_SET(cpuNum, &cpuset);
+	pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+}
+
+/*
 Send a notification message to a client
 @param clientId - The id of the client
 @param msg - The message
 */
-void MatchingEngine::notifyClient(int clientId, std::string msg) {
+static void notifyClient(int clientId, std::string msg) {
 	// Not yet implemented
 }

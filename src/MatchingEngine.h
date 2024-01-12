@@ -43,7 +43,6 @@ class MatchingEngine {
 		void handlePartialFill(Order* order, int qty);
 		void addOrderNode(OrderNode* currNode, Order* order);
 		void freeOrderNode(OrderNode* node);
-		void notifyClient(int clientId, std::string msg);
 };
 
 #endif

@@ -8,7 +8,9 @@
 #define EXPECTED_TOKENS 4
 
 /*
-Parse a request string and return an Order object
+Parse a request string
+@param request - Client request
+@return request status and contents
 */
 ParseResult Parser::parseOrder(char request[MAX_TEXT]) {
 	struct ParseResult result;
